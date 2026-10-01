@@ -262,9 +262,49 @@ def render_movie_card(title: str, rating: float, genres: str, is_prediction: boo
 # Carregamento de dados
 # ──────────────────────────────────────────────
 ratings, ratings_filtered, movies, tags, links, train, test = load_all_data()
-model, matrix = train_model(train, k=20)
+base_model, base_matrix = train_model(train, k=20)
 
+
+def get_active_model_and_matrix(base_matrix: pd.DataFrame, base_model: UserCFRecommender):
+    """
+    Retorna o modelo e a matriz ativos na sessão.
+    Se houver avaliações salvas na sessão, aplica-as sobre uma cópia local da matriz
+    original (sem alterar o dataset original) e re-executa model.fit(),
+    realimentando o algoritmo de recomendação com as novas notas.
+    """
+    session_ratings = st.session_state.get("user_ratings", [])
+    if not session_ratings:
+        return base_model, base_matrix
+
+    session_matrix = base_matrix.copy()
+    for r in session_ratings:
+        uid = int(r["userId"])
+        mid = int(r["movieId"])
+        rating_val = float(r["rating"])
+
+        if uid not in session_matrix.index:
+            session_matrix.loc[uid] = np.nan
+        if mid not in session_matrix.columns:
+            session_matrix[mid] = np.nan
+        session_matrix.loc[uid, mid] = rating_val
+
+    active_model = UserCFRecommender(k=20, min_common=3)
+    active_model.fit(session_matrix)
+    return active_model, session_matrix
+
+
+model, matrix = get_active_model_and_matrix(base_matrix, base_model)
 user_ids = sorted(matrix.index.tolist())
+
+
+def format_user_label(uid):
+    if uid == 99999:
+        return f"Usuário {uid} (Novo Usuário / Sessão)"
+    session_uids = {r["userId"] for r in st.session_state.get("user_ratings", [])}
+    if uid in session_uids:
+        return f"Usuário {uid} (★ modificado na sessão)"
+    return f"Usuário {uid}"
+
 
 
 # ──────────────────────────────────────────────
@@ -306,6 +346,12 @@ with st.sidebar:
     st.markdown(f"- **Distância:** Manhattan")
     st.markdown(f"- **Min. itens comuns:** 3")
     st.markdown(f"- **Dataset:** MovieLens Small")
+
+    session_ratings = st.session_state.get("user_ratings", [])
+    if session_ratings:
+        st.markdown("---")
+        st.markdown("### 🔄 Estado do Modelo")
+        st.info(f"⚡ **{len(session_ratings)}** avaliação(ões) na sessão realimentando o modelo!")
 
 
 
@@ -419,7 +465,7 @@ elif page == "🔍 Consultar Usuário":
     selected_user = st.selectbox(
         "Selecione um usuário:",
         user_ids,
-        format_func=lambda x: f"Usuário {x}",
+        format_func=format_user_label,
     )
 
     if selected_user:
@@ -523,7 +569,7 @@ elif page == "🎬 Recomendações":
     selected_user = st.selectbox(
         "Selecione um usuário:",
         user_ids,
-        format_func=lambda x: f"Usuário {x}",
+        format_func=format_user_label,
         key="rec_user",
     )
 
@@ -629,37 +675,44 @@ elif page == "❄️ Cold Start":
 
 
 elif page == "⭐ Avaliar Filmes":
-    st.markdown("## ⭐ Avaliar Filmes")
+    st.markdown("## ⭐ Avaliar Filmes e Realimentar Modelo")
 
     st.markdown(
         """
         <div class="info-box">
-            <p>Simule a avaliação de filmes por um usuário. As avaliações são adicionadas
-            temporariamente ao modelo para demonstrar como o sistema se adapta.</p>
+            <p>Avalie filmes para um usuário existente ou novo. Ao salvar uma avaliação,
+            uma <strong>cópia local da matriz de interações</strong> é atualizada com a nova nota
+            e o método <code>model.fit()</code> é reexecutado imediatamente, recalculando vizinhos
+            (KNN Manhattan) e gerando <strong>recomendações personalizadas atualizadas em tempo real</strong>.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    if "rating_feedback" in st.session_state:
+        st.success(st.session_state.pop("rating_feedback"))
+
     # Selecionar modo
     mode = st.radio(
         "Modo de avaliação:",
         ["Usuário existente", "Novo usuário (simular cold-start)"],
+        horizontal=True,
     )
 
     if mode == "Usuário existente":
+        base_users = sorted([uid for uid in base_matrix.index.tolist() if uid != 99999])
         eval_user = st.selectbox(
             "Selecione o usuário:",
-            user_ids,
-            format_func=lambda x: f"Usuário {x}",
+            base_users,
+            format_func=format_user_label,
             key="eval_user",
         )
     else:
         eval_user = 99999
-        st.info(f"🆕 Avaliando como novo usuário (ID: {eval_user})")
+        st.info(f"🆕 Avaliando como novo usuário (ID: {eval_user}) — demonstre a saída do cenário cold-start após avaliações!")
 
     # Buscar filme
-    search_term = st.text_input("🔍 Buscar filme por título:")
+    search_term = st.text_input("🔍 Buscar filme por título (ex: Star Wars, Matrix, Toy Story, Pulp Fiction):")
 
     if search_term:
         matched = movies[
@@ -667,10 +720,10 @@ elif page == "⭐ Avaliar Filmes":
         ].head(20)
 
         if len(matched) == 0:
-            st.warning("Nenhum filme encontrado.")
+            st.warning("Nenhum filme encontrado com esse termo.")
         else:
             selected_movie = st.selectbox(
-                "Selecione o filme:",
+                "Selecione o filme encontrado:",
                 matched["movieId"].tolist(),
                 format_func=lambda x: movies[movies["movieId"] == x]["title"].values[0],
             )
@@ -679,48 +732,165 @@ elif page == "⭐ Avaliar Filmes":
                 "Sua avaliação:",
                 0.5,
                 5.0,
-                3.0,
+                4.0,
                 step=0.5,
                 key="new_rating",
             )
 
             st.markdown(
-                f"**{render_stars(new_rating)}** ({new_rating:.1f})"
+                f"**Nota selecionada:** {render_stars(new_rating)} ({new_rating:.1f})"
             )
 
-            if st.button("💾 Salvar Avaliação", type="primary"):
-                # Salvar no session state para demonstração
+            if st.button("💾 Salvar Avaliação e Re-treinar Modelo", type="primary", use_container_width=True):
                 if "user_ratings" not in st.session_state:
                     st.session_state.user_ratings = []
 
                 movie_title = movies[movies["movieId"] == selected_movie]["title"].values[0]
-                st.session_state.user_ratings.append(
-                    {
-                        "userId": eval_user,
-                        "movieId": selected_movie,
-                        "rating": new_rating,
-                        "title": movie_title,
-                    }
+
+                # Atualizar nota se o usuário já avaliou este filme na sessão, ou adicionar
+                existing = False
+                for r in st.session_state.user_ratings:
+                    if r["userId"] == eval_user and r["movieId"] == selected_movie:
+                        r["rating"] = new_rating
+                        existing = True
+                        break
+                if not existing:
+                    st.session_state.user_ratings.append(
+                        {
+                            "userId": eval_user,
+                            "movieId": selected_movie,
+                            "rating": new_rating,
+                            "title": movie_title,
+                        }
+                    )
+
+                st.session_state["rating_feedback"] = (
+                    f"✅ Avaliação salva: **{movie_title}** → **{new_rating:.1f}** ⭐ para o Usuário {eval_user}! "
+                    f"A matriz foi atualizada e o modelo foi re-treinado com sucesso."
                 )
-                st.success(f"✅ Avaliação salva: {movie_title} → {new_rating:.1f}")
+                st.rerun()
 
     # Mostrar avaliações da sessão
-    if "user_ratings" in st.session_state and st.session_state.user_ratings:
+    session_ratings = st.session_state.get("user_ratings", [])
+    if session_ratings:
         st.markdown("---")
-        st.markdown("### 📋 Avaliações desta Sessão")
-        for r in st.session_state.user_ratings:
+        st.markdown("### 📋 Avaliações Desta Sessão")
+        col_list, col_btn = st.columns([4, 1])
+        with col_btn:
+            if st.button("🗑️ Limpar Sessão", help="Restaura o modelo original sem avaliações da sessão"):
+                st.session_state.user_ratings = []
+                st.session_state["rating_feedback"] = "ℹ️ Avaliações da sessão removidas. O modelo retornou ao estado original."
+                st.rerun()
+
+        for r in session_ratings:
             st.markdown(
-                render_movie_card(
-                    r["title"],
-                    r["rating"],
-                    "—",
-                ),
+                f"""
+                <div class="movie-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div class="movie-title">👤 Usuário {r['userId']} · {r['title']}</div>
+                            <div class="movie-genres">Avaliado na sessão atual</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="movie-rating">{render_stars(r['rating'])} {r['rating']:.1f}</div>
+                            <div style="color: #8892b0; font-size: 0.75rem;">Sessão</div>
+                        </div>
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
 
-        if st.button("🗑️ Limpar avaliações da sessão"):
-            st.session_state.user_ratings = []
-            st.rerun()
+    # ──────────────────────────────────────────────
+    # Recomendações Atualizadas para o Usuário
+    # ──────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 🎯 Recomendações Atualizadas para o Usuário {eval_user}")
+
+    user_hist = model.get_user_history(eval_user, movies_df=movies)
+    user_neighbors = model.get_neighbors_info(eval_user)
+
+    if len(user_hist) == 0:
+        st.info(
+            f"ℹ️ O Usuário {eval_user} ainda não possui avaliações. "
+            "Avalie um ou mais filmes acima para que o modelo recalcule vizinhos e gere recomendações personalizadas."
+        )
+    else:
+        # Métricas do usuário
+        col_m1, col_m2, col_m3 = st.columns(3)
+        with col_m1:
+            st.markdown(
+                render_metric_card("Total Avaliações", str(len(user_hist))),
+                unsafe_allow_html=True,
+            )
+        with col_m2:
+            st.markdown(
+                render_metric_card("Nota Média", f"{user_hist['rating'].mean():.2f}"),
+                unsafe_allow_html=True,
+            )
+        with col_m3:
+            st.markdown(
+                render_metric_card("Vizinhos KNN (Manhattan)", str(len(user_neighbors))),
+                unsafe_allow_html=True,
+            )
+
+        # Vizinhos
+        if user_neighbors:
+            st.markdown("#### 👥 Vizinhos Mais Próximos Recalculados")
+            cols = st.columns(min(5, len(user_neighbors)))
+            for i, nb in enumerate(user_neighbors[:5]):
+                with cols[i]:
+                    st.markdown(
+                        f"""
+                        <div class="neighbor-badge" style="display: block; text-align: center;">
+                            👤 User {nb['neighbor_id']}<br>
+                            📏 Dist: {nb['distance']:.4f}<br>
+                            🎯 Sim: {nb['similarity']:.4f}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.warning(
+                f"⚠️ O usuário possui {len(user_hist)} filme(s) avaliado(s), ainda abaixo do mínimo "
+                f"de itens em comum ({model.min_common}) com outros usuários para formar vizinhança. "
+                "Recomendando os títulos mais populares do catálogo excluindo os já avaliados."
+            )
+
+        # Gerar recomendações atualizadas
+        with st.spinner("Gerando recomendações atualizadas..."):
+            updated_recs = model.recommend(eval_user, n=10, movies_df=movies)
+
+        st.markdown(
+            f"""
+            <div class="info-box">
+                <p>✅ <strong>Filmes já avaliados ({len(user_hist)} filme(s)) foram devidamente excluídos das recomendações.</strong><br>
+                Recomendações ordenadas pela predição calculada pelo modelo realimentado.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(f"#### 🎬 Top 10 Recomendações Atualizadas")
+        for i, (_, row) in enumerate(updated_recs.iterrows(), 1):
+            st.markdown(
+                f"""
+                <div class="movie-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div class="movie-title">#{i} · {row['title']}</div>
+                            <div class="movie-genres">🎭 {row.get('genres', 'N/A')}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="movie-rating">{render_stars(row['predicted_rating'])} {row['predicted_rating']:.2f}</div>
+                            <div style="color: #8892b0; font-size: 0.75rem;">Predição Atualizada</div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
 
 
 elif page == "📈 Resultados da Avaliação":

@@ -245,8 +245,14 @@ class UserCFRecommender:
                 .clip(0.5, 5.0)
             )
         else:
-            predictions = pd.Series(
-                self.user_means[user_id], index=candidate_movies
+            # Fallback por popularidade para usuário sem vizinhos suficientes (excluindo já vistos)
+            unseen_pop = self._popularity_ranking.loc[
+                self._popularity_ranking.index.intersection(candidate_movies)
+            ]
+            predictions = (
+                unseen_pop
+                if not unseen_pop.empty
+                else pd.Series(self.user_means[user_id], index=candidate_movies)
             )
 
         top_n = predictions.sort_values(ascending=False, kind="stable").head(n)

@@ -182,13 +182,13 @@ O sistema foi avaliado com 50 usuários amostrados do conjunto de teste (divisã
 
 | Métrica | Valor | Interpretação |
 |---------|-------|---------------|
-| **MAE** | ~0.70 | Erro médio de ~0.70 pontos na escala de 0.5–5.0 |
-| **RMSE** | ~0.90 | Penaliza erros grandes; bom para escala do MovieLens |
-| **Precision@10** | ~0.15 | ~15% dos itens recomendados são relevantes (nota ≥ 4.0) |
-| **Recall@10** | ~0.10 | ~10% dos itens relevantes foram capturados no top-10 |
-| **Coverage** | ~0.20 | O sistema recomenda ~20% do catálogo |
+| **MAE** | 0.6852 | Erro médio absoluto das predições na escala de 0.5–5.0 |
+| **RMSE** | 0.9012 | Raiz do erro quadrático médio; penaliza desvios maiores |
+| **Precision@10** | 0.0160 | ~1.6% dos itens recomendados no top-10 são relevantes (nota ≥ 4.0 no teste) |
+| **Recall@10** | 0.0051 | ~0.51% dos itens relevantes do usuário no teste foram capturados no top-10 |
+| **Coverage** | 0.1406 | O sistema recomenda 14.06% dos itens do catálogo para a amostra avaliada |
 
-> **Nota:** Os valores exatos são gerados dinamicamente pela avaliação. Execute o sistema para obter os resultados atualizados.
+> **Nota:** Valores obtidos na execução de referência via `recommender/cf_reference.py` (seed=42, 50 usuários amostrados, K=10). Execute o script ou a interface Streamlit para reproduzir os resultados.
 
 ### Exemplos de Recomendação
 
