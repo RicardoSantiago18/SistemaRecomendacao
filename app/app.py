@@ -34,7 +34,7 @@ from recommender.evaluation import evaluate_recommender
 # Configuração da página
 # ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="🎬 Sistema de Recomendação de Filmes",
+    page_title="Sistema de Recomendação de Filmes",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -307,15 +307,6 @@ with st.sidebar:
     st.markdown(f"- **Min. itens comuns:** 3")
     st.markdown(f"- **Dataset:** MovieLens Small")
 
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style="text-align: center; color: #8892b0; font-size: 0.8rem;">
-            Desenvolvido para disciplina de<br>Sistemas de Recomendação
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # ──────────────────────────────────────────────

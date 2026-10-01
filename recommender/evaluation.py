@@ -122,6 +122,7 @@ def evaluate_recommender(
     all_actuals = []
     precision_scores = []
     recall_scores = []
+    all_recommended_items = set()
 
     per_user_results = []
 
@@ -148,6 +149,7 @@ def evaluate_recommender(
         # Gerar recomendações
         recs = recommender.recommend(user_id, n=k, movies_df=movies_df)
         recommended_items = recs["movieId"].tolist()
+        all_recommended_items.update(recommended_items)
 
         p_at_k = precision_at_k(recommended_items, relevant_items, k)
         r_at_k = recall_at_k(recommended_items, relevant_items, k)
@@ -175,8 +177,9 @@ def evaluate_recommender(
     avg_precision = float(np.mean(precision_scores)) if precision_scores else 0.0
     avg_recall = float(np.mean(recall_scores)) if recall_scores else 0.0
 
-    # Cobertura
-    cov = coverage(recommender, valid_users, n=k, movies_df=movies_df)
+    # Cobertura calculada com as recomendações já geradas
+    total_items = len(recommender.user_item_matrix.columns)
+    cov = len(all_recommended_items) / total_items if total_items > 0 else 0.0
 
     results = {
         "overall": {

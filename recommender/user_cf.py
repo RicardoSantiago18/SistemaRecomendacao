@@ -12,7 +12,7 @@ Implementa o algoritmo completo:
 
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 
 class UserCFRecommender:
@@ -38,6 +38,7 @@ class UserCFRecommender:
         self.normalized_matrix: Optional[pd.DataFrame] = None
         self.global_mean: float = 0.0
         self._popularity_ranking: Optional[pd.Series] = None
+        self._neighbors_cache: Dict[int, List[Tuple[int, float]]] = {}
 
     def fit(self, user_item_matrix: pd.DataFrame) -> "UserCFRecommender":
         """
@@ -49,6 +50,7 @@ class UserCFRecommender:
             Matriz com userId como índice, movieId como colunas, ratings como valores.
         """
         self.user_item_matrix = user_item_matrix.copy()
+        self._neighbors_cache = {}
 
         # Média de cada usuário (ignora NaN)
         self.user_means = self.user_item_matrix.mean(axis=1)
@@ -107,6 +109,9 @@ class UserCFRecommender:
 
         Retorna lista de (userId, distância) ordenada por distância.
         """
+        if target_user_id in self._neighbors_cache:
+            return self._neighbors_cache[target_user_id]
+
         if target_user_id not in self.user_item_matrix.index:
             return []
 
@@ -125,7 +130,9 @@ class UserCFRecommender:
         # Ordenar por distância (menor = mais similar)
         distances.sort(key=lambda x: x[1])
 
-        return distances[: self.k]
+        neighbors = distances[: self.k]
+        self._neighbors_cache[target_user_id] = neighbors
+        return neighbors
 
     def predict(self, user_id: int, movie_id: int) -> float:
         """
@@ -219,17 +226,31 @@ class UserCFRecommender:
                 columns=["movieId", "predicted_rating", "title", "genres"]
             )
 
-        # Predizer para todos os candidatos
-        predictions = []
-        for movie_id in candidate_movies:
-            pred = self.predict(user_id, movie_id)
-            predictions.append((movie_id, pred))
+        neighbors = self._get_neighbors(user_id)
+        if neighbors:
+            neighbor_ids, distances = zip(*neighbors)
+            weights = pd.Series(
+                [1.0 / (dist + 1e-8) for dist in distances],
+                index=neighbor_ids,
+            )
+            neighbor_ratings = self.normalized_matrix.loc[
+                list(neighbor_ids), candidate_movies
+            ]
+            weighted_sum = neighbor_ratings.mul(weights, axis=0).sum(axis=0)
+            weight_total = neighbor_ratings.notna().mul(weights, axis=0).sum(axis=0)
+            predictions = (
+                weighted_sum.div(weight_total.replace(0, np.nan))
+                .add(self.user_means[user_id])
+                .fillna(self.user_means[user_id])
+                .clip(0.5, 5.0)
+            )
+        else:
+            predictions = pd.Series(
+                self.user_means[user_id], index=candidate_movies
+            )
 
-        # Ordenar por predição (maior primeiro)
-        predictions.sort(key=lambda x: x[1], reverse=True)
-        top_n = predictions[:n]
-
-        result = pd.DataFrame(top_n, columns=["movieId", "predicted_rating"])
+        top_n = predictions.sort_values(ascending=False, kind="stable").head(n)
+        result = top_n.rename_axis("movieId").reset_index(name="predicted_rating")
         result["predicted_rating"] = result["predicted_rating"].round(2)
 
         # Adicionar info dos filmes
